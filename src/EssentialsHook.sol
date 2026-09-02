@@ -140,9 +140,7 @@ contract EssentialsHook is BaseHook {
     /// @dev JIT tracking: keccak(poolId, owner, tickLower, tickUpper, salt) => block liquidity was added
     mapping(bytes32 => uint256) public liquidityAddedAtBlock;
 
-    // ─────────────────────────────────────────────────────────────────
     // Events — the frontend/indexer reads these directly
-    // ─────────────────────────────────────────────────────────────────
 
     event OrderQueued(
         PoolId indexed poolId, address indexed trader, bool zeroForOne, uint256 amountIn, uint256 batchStartBlock

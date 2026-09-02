@@ -1,0 +1,13 @@
+{
+    "name": "essentials-resolver",
+    "version": "0.1.0",
+    "description": "Off-chain companion service for the Essentials hook: a permissionless batch-settlement keeper, plus a toxic-flow fallback router that checks real Flashbots Protect / CoW Protocol endpoints before large orders ever reach the on-chain batch.",
+    "type": "module",
+    "scripts": {
+        "keeper": "node src/keeper.js",
+        "fallback": "node src/toxicFlowFallback.js"
+    },
+    "dependencies": {
+        "ethers": "^6.13.4"
+    }
+}
