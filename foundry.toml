@@ -9,4 +9,10 @@ via_ir = true
 optimizer = true
 optimizer_runs = 200
 ffi = true
+
+[profile.default.fuzz]
+runs = 256
+
+[rpc_endpoints]
+testnet = "${BASE_SEPOLIA_RPC_URL}"
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
