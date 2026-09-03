@@ -42,11 +42,6 @@ pragma solidity ^0.8.26;
  * auctions and TWAMM, adapted to run as a self-contained hook with no
  * off-chain infrastructure required for the core mechanism).
  *
- * The companion `/resolver` off-chain service adds a *real* Flashbots
- * Protect / CoW Protocol touchpoint for flagged toxic-sized orders before
- * they ever reach this contract — see resolver/README.md.
- *
- *
  */
 import {BaseHook} from "./base/BaseHook.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
@@ -204,7 +199,6 @@ contract EssentialsHook is BaseHook {
 
         PoolId poolId = key.toId();
         BatchState storage batch = batches[poolId];
-
         // If a previous batch's window has elapsed and nobody called
         // settleBatch() in time, force-settle it now rather than silently
         // discarding it. `_beforeSwap` already executes inside an active
@@ -502,7 +496,6 @@ contract EssentialsHook is BaseHook {
     }
 
     /// Step 5: surcharge + rounding dust -> LPs (donate) + non-toxic orders.
-
     function _recapture(PoolKey memory key, QueuedOrder[] storage queue, SettleCtx memory ctx) internal {
         uint256 dust0 = key.currency0.balanceOfSelf();
         uint256 dust1 = key.currency1.balanceOfSelf();
@@ -613,7 +606,7 @@ contract EssentialsHook is BaseHook {
         return keccak256(abi.encode(poolId, owner, tickLower, tickUpper, salt));
     }
 
-    // Getter/View helper functions
+    // Getters/View helper functions
 
     function getQueueLength(PoolKey calldata key) external view returns (uint256) {
         return orderQueue[key.toId()].length;

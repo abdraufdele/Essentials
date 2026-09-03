@@ -203,8 +203,9 @@ Deploy: `make deploy POOL_MANAGER=<address> RPC_URL=<url> PRIVATE_KEY=<key>`.
 - **Queue visibility before settlement.** Orders and `OrderQueued` events are public for the entire batch window. This protects against sandwiching *within* a settlement (no ordering advantage once queued) — it does not hide the queue's existence or contents from someone watching before settlement happens. Closing that fully needs off-chain infrastructure this project deliberately doesn't depend on for its core guarantee.
 - **Batch settlement adds latency.** Swappers wait 2–20 blocks (volatility-scaled) instead of instant confirmation — a real UX cost traded for the protection, not a free lunch.
 - **Thin pools remain a risk for permissionless, timed settlement.** `settleBatch()` is callable by anyone at a time of their choosing; on a thin pool the clearing price for the *entire batch* derives from spot price + one residual swap at that moment.
-- **Sybil evasion of toxic detection is unsolved.** The fix aggregates by trader *address*; a determined attacker rotating addresses is a generally hard, unsolved on-chain problem, not something this patch claims to close.
+- **Sybil evasion of toxic detection is unsolved.** The fix aggregates by trader *address*; a determined attacker rotating addresses is a generally hard, unsolved on-chain problem.
 - Exact-input swaps only; no per-order slippage revert inside a batch (would reintroduce the ordering games this hook removes); `sender` in `beforeSwap` is the calling router, not the end user — routers must pass `abi.encode(trueSwapper, minAmountOut)` as `hookData`.
+- Wire the CoW/Flashbots fallback into actual routing, not just a standalone comparison script.
 
 ---
 
