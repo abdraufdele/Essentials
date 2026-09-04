@@ -56,7 +56,8 @@ test-v: ## Run the Foundry test suite with logs (-vv)
 
 fmt: ## Format Solidity sources
 	forge fmt
-
+block: 
+	cast block-number --rpc-url http://127.0.0.1:8545
 deploy: ## Deploy EssentialsHook — usage: make deploy POOL_MANAGER=0x... RPC_URL=... PRIVATE_KEY=...
 	forge script script/DeployEssentialsHook.s.sol --sig "run(address)" $(POOL_MANAGER) \
 		--rpc-url $(RPC_URL) --private-key $(PRIVATE_KEY) --broadcast
@@ -100,3 +101,5 @@ clean: ## Remove Foundry build artifacts
 clean-all: clean ## Also remove all installed dependencies (forge libs + node_modules)
 	rm -rf lib
 	rm -rf resolver/node_modules
+
+	

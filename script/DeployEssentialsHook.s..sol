@@ -25,6 +25,8 @@ contract DeployEssentialsHook is Script {
     // against msg.sender compiles fine but reverts on the very first
     // real broadcast, since the deployment that actually happens goes
     // through this factory instead.
+    //address constant BASE_SEPOLIA_POOL_MANAGER = 0x05E73354cFDd6745C338b50BcFDdFA3Aa6fA03408;
+    address constant UNICHAIN_SEPOLIA_POOL_MANAGER = 0x00B036B58a818B1BC34d502D3fE730Db729e62AC;
 
     function run(address poolManager) external returns (EssentialsHook hook) {
         uint160 flags = uint160(
