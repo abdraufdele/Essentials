@@ -7,6 +7,7 @@
 **Victim-restorative MEV capture via on-chain batch settlement.**
 
 [Demo Video](https://youtu.be/z3ysnrBqJ1A?si=HHRuSSdD1WSNYB1n)
+
 [Slide](https://gamma.app/docs/ESSENTIALS--v3yb0z4zwz495wp)
 
 **Partner integrations:** CoW Protocol API and Flashbots Protect RPC, via a standalone off-chain script (`resolver/toxicFlowFallback.js`) — not wired into on-chain execution. See [CoW Protocol / Flashbots fallback](#cow-protocol--flashbots-fallback) below for exactly what this does and doesn't do.
