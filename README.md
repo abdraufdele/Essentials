@@ -200,6 +200,49 @@ make settle HOOK=.. TOKEN0=.. TOKEN1=.. RPC_URL=.. PRIVATE_KEY=..
 
 Deploy: `make deploy POOL_MANAGER=<address> RPC_URL=<url> PRIVATE_KEY=<key>`.
 
+# Unichain Sepolia Deployment
+
+The hook has been deployed and tested on **Unichain Sepolia**.
+
+### Network
+
+| Parameter              | Value                                        |
+| ---------------------- | -------------------------------------------- |
+| Network                | Unichain Sepolia                             |
+| Chain ID               | `1301`                                       |
+| Uniswap v4 PoolManager | `0x00B036B58a818B1BC34d502D3fE730Db729e62AC` |
+| EssentialsHook         | `0x8914a7d921dc6d0d159b7e1ed2457ecaac7d1688` |
+
+### Deployed Contract
+
+**EssentialsHook**
+
+```text
+0x8914a7d921dc6d0d159b7e1ed2457ecaac7d1688
+```
+The contract can be viewed on the Unichain Sepolia block explorer.
+
+### Deployment Command
+
+```bash
+forge script script/DeployEssentialsHook.s.sol:DeployEssentialsHook \
+  --sig "run(address)" \
+  0x00B036B58a818B1BC34d502D3fE730Db729e62AC \
+  --rpc-url https://sepolia.unichain.org \
+  --private-key "$UNICHAIN_SEPOLIA_PRIVATE_KEY" \
+  --broadcast
+```
+
+
+
+
+* [x] Uniswap v4 hook implemented
+* [x] Hook compiled successfully
+* [x] Hook deployed to Unichain Sepolia
+* [x] Full end-to-end testing
+* [ ] Mainnet deployment
+
+
 ---
 
 ## Limitations & Future Improvements
@@ -226,3 +269,20 @@ script/demo/                   — live sandwich demo on a real local chain
 resolver/                      — off-chain keeper + CoW/Flashbots fallback script
 Makefile                       — make install / test / demo / status / settle / deploy
 ```
+
+# Essentials: An MEV-mitigating Uniswap v4 hook that doesn't just tax attackers — it repays the victim.
+
+## How The Design Evolved
+
+
+
+
+### Weeks 1–2: Research On The Implementation Of The Project.
+
+
+### Week 3: Started writing code
+
+Pushing to github, and deployed the project on unichain sepolia testnet.
+
+
+
