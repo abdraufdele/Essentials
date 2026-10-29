@@ -34,6 +34,14 @@ contract EssentialsHookIntegrationTest is EssentialsHookTestBase {
         // with no payout. Now it force-settles their batch first.
         _queueSwap(true, 0.5 ether, carol);
 
+        // Router-triggered settlement records claims so recipient code does
+        // not execute inside the router's active PoolManager unlock.
+        assertGt(hook.claimable(currency1, alice), 0);
+        assertGt(hook.claimable(currency0, bob), 0);
+        vm.prank(alice);
+        hook.claim(currency1, alice);
+        vm.prank(bob);
+        hook.claim(currency0, bob);
         assertGt(currency1.balanceOf(alice), 0, "alice's stale order was paid out, not lost");
         assertGt(currency0.balanceOf(bob), 0, "bob's stale order was paid out, not lost");
 

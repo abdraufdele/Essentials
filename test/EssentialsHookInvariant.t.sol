@@ -85,8 +85,21 @@ contract EssentialsHookInvariantTest is EssentialsHookTestBase {
         EssentialsHook.BatchState memory b = hook.getBatch(key);
         if (b.startBlock != 0) return; // batch open -- balances are legitimately in flight
 
-        assertLt(currency0.balanceOf(address(hook)), DUST_BOUND, "token0 dust bounded once settled");
-        assertLt(currency1.balanceOf(address(hook)), DUST_BOUND, "token1 dust bounded once settled");
+        assertLt(
+            currency0.balanceOf(address(hook)) - hook.totalClaimable(currency0),
+            DUST_BOUND,
+            "unallocated token0 dust bounded once settled"
+        );
+        assertLt(
+            currency1.balanceOf(address(hook)) - hook.totalClaimable(currency1),
+            DUST_BOUND,
+            "unallocated token1 dust bounded once settled"
+        );
+    }
+
+    function invariant_DeferredClaimsRemainCollateralized() public view {
+        assertGe(currency0.balanceOf(address(hook)), hook.totalClaimable(currency0), "token0 claims funded");
+        assertGe(currency1.balanceOf(address(hook)), hook.totalClaimable(currency1), "token1 claims funded");
     }
 
     /// Runs once after the whole fuzzing campaign. Logged (not asserted)

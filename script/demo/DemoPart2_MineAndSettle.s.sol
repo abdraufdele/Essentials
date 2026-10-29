@@ -30,7 +30,7 @@ contract DemoPart2_MineAndSettle is Script {
     uint256 constant VICTIM_PK = 0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365;
 
     function run() external {
-        EssentialsHook hook = EssentialsHook(vm.envAddress("HOOK"));
+        EssentialsHook hook = EssentialsHook(payable(vm.envAddress("HOOK")));
         MockERC20 token0 = MockERC20(vm.envAddress("TOKEN0"));
         MockERC20 token1 = MockERC20(vm.envAddress("TOKEN1"));
         address attacker = vm.addr(ATTACKER_PK);

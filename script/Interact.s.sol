@@ -61,7 +61,7 @@ contract Interact is Script {
     using PoolIdLibrary for PoolKey;
 
     function _hook() internal view returns (EssentialsHook) {
-        return EssentialsHook(vm.envAddress("HOOK"));
+        return EssentialsHook(payable(vm.envAddress("HOOK")));
     }
 
     function _key() internal view returns (PoolKey memory) {

@@ -75,6 +75,9 @@ contract EssentialsHook is BaseHook {
     error BatchFull();
     error JitCooldownActive();
     error ZeroAmount();
+    error NothingToClaim();
+    error InvalidRecipient();
+    error BatchAmountTooLarge();
 
     // Config (immutable-ish; owner is the deployer, single-purpose demo)
 
@@ -83,7 +86,9 @@ contract EssentialsHook is BaseHook {
     uint256 public constant MIN_WINDOW_BLOCKS = 2;
     uint256 public constant MAX_WINDOW_BLOCKS = 20;
 
-    uint256 public constant MAX_BATCH_SIZE = 75;
+    // Includes claim accounting and post-unlock delivery within the tested gas budget.
+    uint256 public constant MAX_BATCH_SIZE = 64;
+    uint256 public constant MAX_SIDE_INPUT = uint256(uint128(type(int128).max));
 
     /// @notice Tick-move threshold (absolute) that is considered "1 unit"
     /// of volatility for window-scaling purposes.
@@ -129,6 +134,14 @@ contract EssentialsHook is BaseHook {
     mapping(PoolId => BatchState) public batches;
     mapping(PoolId => QueuedOrder[]) internal orderQueue;
 
+    /// @notice Failed deliveries remain owned by their original payee.
+    mapping(Currency => mapping(address => uint256)) public claimable;
+    mapping(Currency => uint256) public totalClaimable;
+    uint256 public constant PAYOUT_GAS_LIMIT = 50_000;
+
+    event PayoutDeferred(Currency indexed currency, address indexed trader, uint256 amount);
+    event PayoutClaimed(Currency indexed currency, address indexed trader, address recipient, uint256 amount);
+
     /// @dev last observed tick per pool, for volatility-scaled windows
     mapping(PoolId => int24) public lastObservedTick;
 
@@ -156,6 +169,9 @@ contract EssentialsHook is BaseHook {
     event JitBlocked(PoolId indexed poolId, address indexed lp, uint256 blocksRemaining);
 
     constructor(IPoolManager _manager) BaseHook(_manager) {}
+
+    /// @dev PoolManager uses an empty-calldata value transfer for native custody.
+    receive() external payable onlyPoolManager {}
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
@@ -193,6 +209,7 @@ contract EssentialsHook is BaseHook {
         IPoolManager.SwapParams calldata params,
         bytes calldata hookData
     ) internal override returns (bytes4, BeforeSwapDelta, uint24) {
+        if (_settling) revert SettlementReentrancy();
         if (params.amountSpecified >= 0) revert ExactOutputNotSupported();
         uint256 amountIn = uint256(-params.amountSpecified);
         if (amountIn == 0) revert ZeroAmount();
@@ -231,6 +248,8 @@ contract EssentialsHook is BaseHook {
         // custody of funds, so a rejected order (batch already full)
         // reverts cleanly with no side effects.
         if (orderQueue[poolId].length >= MAX_BATCH_SIZE) revert BatchFull();
+        uint256 sideTotal = params.zeroForOne ? batch.totalIn0 : batch.totalIn1;
+        if (amountIn > MAX_SIDE_INPUT || sideTotal + amountIn > MAX_SIDE_INPUT) revert BatchAmountTooLarge();
 
         Currency inputCurrency = params.zeroForOne ? key.currency0 : key.currency1;
 
@@ -295,13 +314,83 @@ contract EssentialsHook is BaseHook {
         _settling = false;
     }
 
+    /// @notice Retry a deferred delivery, optionally to a different destination.
+    /// Only the recorded payee can spend its claim. A failed retry restores it.
+    function claim(Currency currency, address recipient) external nonReentrantSettle {
+        if (recipient == address(0)) revert InvalidRecipient();
+        uint256 amount = claimable[currency][msg.sender];
+        if (amount == 0) revert NothingToClaim();
+        claimable[currency][msg.sender] = 0;
+        totalClaimable[currency] -= amount;
+        currency.transfer(recipient, amount);
+        emit PayoutClaimed(currency, msg.sender, recipient, amount);
+    }
+
+    /// @dev Isolated self-call: a transfer that moves tokens and then reports
+    /// failure must roll back before a claim is credited.
+    function transferPayout(Currency currency, address recipient, uint256 amount) external {
+        if (msg.sender != address(this)) revert NotSelf();
+        currency.transfer(recipient, amount);
+    }
+
+    function _disburse(Currency currency, address trader, uint256 amount) internal {
+        if (amount == 0) return;
+        // No recipient or output-token code runs inside the manager's unlock.
+        // Explicit settlement delivers after unlock; router-triggered
+        // settlement leaves a claim to be collected independently.
+        _creditClaim(currency, trader, amount);
+    }
+
+    function _creditClaim(Currency currency, address trader, uint256 amount) internal {
+        claimable[currency][trader] += amount;
+        totalClaimable[currency] += amount;
+        emit PayoutDeferred(currency, trader, amount);
+    }
+
+    function _attemptDelivery(Currency currency, address trader, uint256 amount) internal returns (bool delivered) {
+        bytes memory payload = abi.encodeCall(this.transferPayout, (currency, trader, amount));
+        // Bound recipient/token work and never copy attacker-controlled revert data.
+        assembly ("memory-safe") {
+            delivered := call(PAYOUT_GAS_LIMIT, address(), 0, add(payload, 32), mload(payload), 0, 0)
+        }
+    }
+
     function settleBatch(PoolKey calldata key) external {
         PoolId poolId = key.toId();
         BatchState storage batch = batches[poolId];
         if (orderQueue[poolId].length == 0) revert EmptyBatch();
         if (block.number <= batch.startBlock + batch.windowBlocks) revert BatchNotReady();
 
+        address[] memory payees = new address[](orderQueue[poolId].length);
+        for (uint256 i = 0; i < payees.length; i++) {
+            payees[i] = orderQueue[poolId][i].trader;
+        }
         manager.unlock(abi.encode(key));
+        _deliverClaims(key, payees);
+    }
+
+    function _deliverClaims(PoolKey calldata key, address[] memory payees) internal nonReentrantSettle {
+        for (uint256 i = 0; i < payees.length; i++) {
+            _deliverClaim(key.currency0, payees[i]);
+            _deliverClaim(key.currency1, payees[i]);
+        }
+        // A successful recipient may call sync even while the manager is
+        // locked. Leave the native settlement mode clean for later callers.
+        manager.sync(Currency.wrap(address(0)));
+    }
+
+    function _deliverClaim(Currency currency, address payee) internal {
+        uint256 amount = claimable[currency][payee];
+        if (amount == 0) return;
+        claimable[currency][payee] = 0;
+        totalClaimable[currency] -= amount;
+        if (_attemptDelivery(currency, payee, amount)) {
+            emit PayoutClaimed(currency, payee, payee, amount);
+        } else {
+            // Restore an existing allocation; do not emit a second credit.
+            claimable[currency][payee] = amount;
+            totalClaimable[currency] += amount;
+        }
     }
 
     /// @dev Only the PoolManager may call back into us, and only while we
@@ -329,6 +418,12 @@ contract EssentialsHook is BaseHook {
         uint256 token0Pool;
         uint256 token1Pool;
         uint256 clearingPriceX96;
+        uint256 refund0;
+        uint256 refund1;
+        uint256 paid0; // intended deliveries, including deferred claims
+        uint256 paid1;
+        uint256 lpRecapture0;
+        uint256 lpRecapture1;
         bool[] isToxic;
     }
 
@@ -351,11 +446,11 @@ contract EssentialsHook is BaseHook {
             ctx.n,
             batch.totalIn0,
             batch.totalIn1,
-            ctx.residualAmountIn,
+            ctx.actualResidualIn,
             ctx.residualZeroForOne,
             ctx.clearingPriceX96,
-            (key.currency0.balanceOfSelf() * LP_RECAPTURE_SHARE_BPS) / BPS_DENOMINATOR,
-            (key.currency1.balanceOfSelf() * LP_RECAPTURE_SHARE_BPS) / BPS_DENOMINATOR,
+            ctx.lpRecapture0,
+            ctx.lpRecapture1,
             nextWindow
         );
 
@@ -474,6 +569,14 @@ contract EssentialsHook is BaseHook {
         ctx.token0Pool = ctx.residualAmountIn == 0
             ? ctx.netIn0
             : (ctx.residualZeroForOne ? ctx.netIn0 - ctx.actualResidualIn : ctx.netIn0 + ctx.outAmt);
+
+        // Unexecuted input belongs to its source side, not opposite-side
+        // traders or LPs. In a one-sided batch all remaining input is refundable.
+        uint256 unspent = ctx.residualAmountIn - ctx.actualResidualIn;
+        ctx.refund0 = ctx.netIn1 == 0 ? ctx.token0Pool : (ctx.residualZeroForOne ? unspent : 0);
+        ctx.refund1 = ctx.netIn0 == 0 ? ctx.token1Pool : (ctx.residualZeroForOne ? 0 : unspent);
+        ctx.token0Pool -= ctx.refund0;
+        ctx.token1Pool -= ctx.refund1;
         ctx.clearingPriceX96 = ctx.netIn0 > 0 ? FullMath.mulDiv(ctx.token1Pool, FixedPoint96.Q96, ctx.netIn0) : priceX96;
     }
 
@@ -484,21 +587,40 @@ contract EssentialsHook is BaseHook {
             if (o.zeroForOne) {
                 if (ctx.netIn0 > 0 && ctx.token1Pool > 0) {
                     uint256 out = FullMath.mulDiv(ctx.token1Pool, o.amountIn, ctx.netIn0);
-                    if (out > 0) key.currency1.transfer(o.trader, out);
+                    ctx.paid1 += out;
+                    _disburse(key.currency1, o.trader, out);
                 }
+                uint256 refund = FullMath.mulDiv(ctx.refund0, o.amountIn, ctx.netIn0);
+                ctx.paid0 += refund;
+                _disburse(key.currency0, o.trader, refund);
             } else {
                 if (ctx.netIn1 > 0 && ctx.token0Pool > 0) {
                     uint256 out = FullMath.mulDiv(ctx.token0Pool, o.amountIn, ctx.netIn1);
-                    if (out > 0) key.currency0.transfer(o.trader, out);
+                    ctx.paid0 += out;
+                    _disburse(key.currency0, o.trader, out);
                 }
+                uint256 refund = FullMath.mulDiv(ctx.refund1, o.amountIn, ctx.netIn1);
+                ctx.paid1 += refund;
+                _disburse(key.currency1, o.trader, refund);
             }
         }
     }
 
     /// Step 5: surcharge + rounding dust -> LPs (donate) + non-toxic orders.
     function _recapture(PoolKey memory key, QueuedOrder[] storage queue, SettleCtx memory ctx) internal {
-        uint256 dust0 = key.currency0.balanceOfSelf();
-        uint256 dust1 = key.currency1.balanceOfSelf();
+        // These are this batch's budgets only. Other queues, deferred claims
+        // and unsolicited transfers must never enter its recapture calculation.
+        uint256 dust0 = ctx.token0Pool + ctx.refund0 + ctx.surcharge0 - ctx.paid0;
+        uint256 dust1 = ctx.token1Pool + ctx.refund1 + ctx.surcharge1 - ctx.paid1;
+
+        // A partial/no fill can leave no active liquidity to receive donations.
+        // Return the remaining allocation to input owners (or output owners if
+        // this currency had no input side), rather than locking the whole batch.
+        if (manager.getLiquidity(key.toId()) == 0) {
+            _returnRemainder(key.currency0, queue, ctx.netIn0 > 0, dust0);
+            _returnRemainder(key.currency1, queue, ctx.netIn1 == 0, dust1);
+            return;
+        }
 
         uint256 lp0 = (dust0 * LP_RECAPTURE_SHARE_BPS) / BPS_DENOMINATOR;
         uint256 lp1 = (dust1 * LP_RECAPTURE_SHARE_BPS) / BPS_DENOMINATOR;
@@ -521,19 +643,49 @@ contract EssentialsHook is BaseHook {
             if (lp0 > 0) key.currency0.settle(manager, address(this), lp0, false);
             if (lp1 > 0) key.currency1.settle(manager, address(this), lp1, false);
         }
+        ctx.lpRecapture0 = lp0;
+        ctx.lpRecapture1 = lp1;
 
         if (bonusPool0 > 0 || bonusPool1 > 0) {
+            uint256 cumulative0;
+            uint256 cumulative1;
+            uint256 allocated0;
+            uint256 allocated1;
             for (uint256 i = 0; i < ctx.n; i++) {
                 if (ctx.isToxic[i]) continue;
                 QueuedOrder storage o = queue[i];
                 if (o.zeroForOne && bonusPool1 > 0 && ctx.nonToxicIn0 > 0) {
-                    uint256 bonus = FullMath.mulDiv(bonusPool1, o.amountIn, ctx.nonToxicIn0);
-                    if (bonus > 0) key.currency1.transfer(o.trader, bonus);
+                    cumulative0 += o.amountIn;
+                    uint256 nextAllocated = FullMath.mulDiv(bonusPool1, cumulative0, ctx.nonToxicIn0);
+                    _disburse(key.currency1, o.trader, nextAllocated - allocated1);
+                    allocated1 = nextAllocated;
                 } else if (!o.zeroForOne && bonusPool0 > 0 && ctx.nonToxicIn1 > 0) {
-                    uint256 bonus = FullMath.mulDiv(bonusPool0, o.amountIn, ctx.nonToxicIn1);
-                    if (bonus > 0) key.currency0.transfer(o.trader, bonus);
+                    cumulative1 += o.amountIn;
+                    uint256 nextAllocated = FullMath.mulDiv(bonusPool0, cumulative1, ctx.nonToxicIn1);
+                    _disburse(key.currency0, o.trader, nextAllocated - allocated0);
+                    allocated0 = nextAllocated;
                 }
             }
+        }
+    }
+
+    /// @dev Cumulative allocation returns every unit without per-order dust.
+    function _returnRemainder(Currency currency, QueuedOrder[] storage queue, bool zeroForOne, uint256 amount)
+        internal
+    {
+        if (amount == 0) return;
+        uint256 total;
+        for (uint256 i = 0; i < queue.length; i++) {
+            if (queue[i].zeroForOne == zeroForOne) total += queue[i].amountIn;
+        }
+        uint256 cumulative;
+        uint256 allocated;
+        for (uint256 i = 0; i < queue.length; i++) {
+            if (queue[i].zeroForOne != zeroForOne) continue;
+            cumulative += queue[i].amountIn;
+            uint256 nextAllocated = FullMath.mulDiv(amount, cumulative, total);
+            _disburse(currency, queue[i].trader, nextAllocated - allocated);
+            allocated = nextAllocated;
         }
     }
 
